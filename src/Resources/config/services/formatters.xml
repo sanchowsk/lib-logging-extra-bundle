@@ -12,5 +12,10 @@
                  class="Paysera\LoggingExtraBundle\Service\Formatter\GelfMessageFormatter">
             <argument>%paysera_logging_extra.application_name%</argument>
         </service>
+
+        <service id="paysera_logging_extra.formatter.stdout_json"
+                 class="Paysera\LoggingExtraBundle\Service\Formatter\StdoutJsonFormatter">
+            <argument>%paysera_logging_extra.application_name%</argument>
+        </service>
     </services>
 </container>

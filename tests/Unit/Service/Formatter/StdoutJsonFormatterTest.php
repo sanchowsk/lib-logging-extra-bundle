@@ -1,0 +1,230 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Paysera\LoggingExtraBundle\Tests\Unit\Service\Formatter;
+
+use DateTimeImmutable;
+use Monolog\Logger;
+use Paysera\LoggingExtraBundle\Service\Formatter\StdoutJsonFormatter;
+use PHPUnit\Framework\TestCase;
+
+class StdoutJsonFormatterTest extends TestCase
+{
+    private const APPLICATION_NAME = 'app-target2-integration';
+
+    public function testFormatsRecordAsSingleCompactJsonLine(): void
+    {
+        $output = $this->format();
+
+        $this->assertStringEndsWith("\n", $output);
+        $this->assertSame(1, substr_count($output, "\n"), 'Record must be a single line');
+
+        $line = rtrim($output, "\n");
+        $this->assertStringNotContainsString("\n", $line, 'JSON must not contain embedded newlines');
+
+        $decoded = json_decode($line, true);
+        $this->assertIsArray($decoded);
+        $this->assertSame(self::APPLICATION_NAME, $decoded['application_name']);
+        $this->assertSame('app', $decoded['channel']);
+        $this->assertSame('Example message', $decoded['message']);
+        $this->assertSame('INFO', $decoded['level_name']);
+        $this->assertArrayHasKey('timestamp', $decoded);
+    }
+
+    public function testTimestampIsIso8601WithMicrosecondsAndOffset(): void
+    {
+        $decoded = $this->decode();
+
+        $this->assertSame('2026-06-10T16:03:21.123456+03:00', $decoded['timestamp']);
+    }
+
+    public function testEmitsCanonicalFieldOrder(): void
+    {
+        $line = rtrim($this->format([
+            'context' => ['client_id' => 7],
+            'extra' => ['correlation_id' => 'corr-1', 'memory_peak' => '2 MB'],
+        ]), "\n");
+
+        $decoded = json_decode($line, true);
+        $this->assertIsArray($decoded);
+        $this->assertSame(
+            ['timestamp', 'application_name', 'channel', 'level', 'level_name', 'message', 'context', 'extra', 'correlation_id'],
+            array_keys($decoded),
+            'Field order must match the canonical evp StdoutJsonFormatter'
+        );
+    }
+
+    /**
+     * @dataProvider syslogLevelProvider
+     */
+    public function testMapsMonologLevelToSyslogSeverity(
+        int $monologLevel,
+        string $levelName,
+        int $expectedSyslogLevel
+    ): void {
+        $decoded = $this->decode(['level' => $monologLevel, 'level_name' => $levelName]);
+
+        $this->assertSame($expectedSyslogLevel, $decoded['level']);
+    }
+
+    /**
+     * @return array<string, array{int, string, int}>
+     */
+    public function syslogLevelProvider(): array
+    {
+        return [
+            'debug' => [Logger::DEBUG, 'DEBUG', 7],
+            'info' => [Logger::INFO, 'INFO', 6],
+            'notice' => [Logger::NOTICE, 'NOTICE', 5],
+            'warning' => [Logger::WARNING, 'WARNING', 4],
+            'error' => [Logger::ERROR, 'ERROR', 3],
+            'critical' => [Logger::CRITICAL, 'CRITICAL', 2],
+            'alert' => [Logger::ALERT, 'ALERT', 1],
+            'emergency' => [Logger::EMERGENCY, 'EMERGENCY', 0],
+        ];
+    }
+
+    public function testHoistsCorrelationIdFromExtraToTopLevel(): void
+    {
+        $decoded = $this->decode([
+            'extra' => ['correlation_id' => 'app-target2-integration6a171447acf112.97444679', 'memory_peak' => '2 MB'],
+        ]);
+
+        $this->assertSame('app-target2-integration6a171447acf112.97444679', $decoded['correlation_id']);
+
+        $extra = $decoded['extra'];
+        $this->assertIsArray($extra);
+        $this->assertArrayNotHasKey('correlation_id', $extra);
+        $this->assertSame('2 MB', $extra['memory_peak']);
+    }
+
+    public function testPreservesFalseyContextValues(): void
+    {
+        $decoded = $this->decode([
+            'context' => ['client_id' => 0, 'enabled' => false, 'note' => ''],
+        ]);
+
+        $context = $decoded['context'];
+        $this->assertIsArray($context);
+        $this->assertSame(0, $context['client_id']);
+        $this->assertFalse($context['enabled']);
+        $this->assertSame('', $context['note']);
+    }
+
+    public function testOmitsEmptyContextExtraAndFullMessage(): void
+    {
+        $decoded = $this->decode();
+
+        $this->assertArrayNotHasKey('context', $decoded);
+        $this->assertArrayNotHasKey('extra', $decoded);
+        $this->assertArrayNotHasKey('full_message', $decoded);
+        $this->assertArrayNotHasKey('correlation_id', $decoded);
+    }
+
+    public function testTruncatesRecordsExceedingByteCap(): void
+    {
+        $line = rtrim($this->format(['message' => str_repeat('x', 40000)]), "\n");
+
+        $this->assertLessThanOrEqual(32766, strlen($line));
+        $decoded = json_decode($line, true);
+        $this->assertIsArray($decoded);
+        $this->assertTrue($decoded['truncated']);
+    }
+
+    public function testTruncatesEscapeHeavyRecordWithinByteCap(): void
+    {
+        // Characters that JSON-escapes to multiple bytes (" -> \", \n -> \\n, \x01 -> ):
+        // the cap must be enforced against the ENCODED line, not the raw byte count.
+        $line = rtrim($this->format(['message' => str_repeat("\"\n\x01", 20000)]), "\n");
+
+        $this->assertLessThanOrEqual(32766, strlen($line));
+        $decoded = json_decode($line, true);
+        $this->assertIsArray($decoded);
+        $this->assertTrue($decoded['truncated']);
+    }
+
+    public function testDropsContextAndExtraBeforeTruncatingMessage(): void
+    {
+        $decoded = $this->decode([
+            'message' => str_repeat('x', 40000),
+            'context' => ['client_id' => 7],
+            'extra' => ['correlation_id' => 'corr-1'],
+        ]);
+
+        $this->assertTrue($decoded['truncated']);
+        $this->assertArrayNotHasKey('context', $decoded);
+        $this->assertArrayNotHasKey('extra', $decoded);
+    }
+
+    public function testFormatBatchEmitsOneLinePerRecord(): void
+    {
+        $formatter = new StdoutJsonFormatter(self::APPLICATION_NAME);
+
+        $batch = $formatter->formatBatch([
+            $this->record(['message' => 'first']),
+            $this->record(['message' => 'second']),
+        ]);
+
+        $lines = array_values(array_filter(explode("\n", $batch), static function (string $line): bool {
+            return $line !== '';
+        }));
+        $this->assertCount(2, $lines);
+
+        $first = json_decode($lines[0], true);
+        $second = json_decode($lines[1], true);
+        $this->assertIsArray($first);
+        $this->assertIsArray($second);
+        $this->assertSame('first', $first['message']);
+        $this->assertSame('second', $second['message']);
+    }
+
+    public function testPassesThroughUnmappedLevelUnchanged(): void
+    {
+        // Matches the canonical evp formatter: an unmapped Monolog level is emitted as-is.
+        $decoded = $this->decode(['level' => 999, 'level_name' => 'CUSTOM']);
+
+        $this->assertSame(999, $decoded['level']);
+        $this->assertSame('CUSTOM', $decoded['level_name']);
+    }
+
+    /**
+     * @param array<string, mixed> $overrides
+     */
+    private function format(array $overrides = []): string
+    {
+        return (new StdoutJsonFormatter(self::APPLICATION_NAME))->format($this->record($overrides));
+    }
+
+    /**
+     * @param array<string, mixed> $overrides
+     *
+     * @return array<string, mixed>
+     */
+    private function decode(array $overrides = []): array
+    {
+        $decoded = json_decode(rtrim($this->format($overrides), "\n"), true);
+        $this->assertIsArray($decoded);
+
+        /** @var array<string, mixed> $decoded */
+        return $decoded;
+    }
+
+    /**
+     * @param array<string, mixed> $overrides
+     *
+     * @return array<string, mixed>
+     */
+    private function record(array $overrides = []): array
+    {
+        return array_merge([
+            'message' => 'Example message',
+            'context' => [],
+            'level' => Logger::INFO,
+            'level_name' => 'INFO',
+            'channel' => 'app',
+            'datetime' => new DateTimeImmutable('2026-06-10T16:03:21.123456+03:00'),
+            'extra' => [],
+        ], $overrides);
+    }
+}
