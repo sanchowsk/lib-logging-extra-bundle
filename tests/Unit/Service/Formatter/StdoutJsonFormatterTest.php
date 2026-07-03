@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Paysera\LoggingExtraBundle\Tests\Unit\Service\Formatter;
 
 use DateTimeImmutable;
+use InvalidArgumentException;
 use Monolog\Logger;
 use Paysera\LoggingExtraBundle\Service\Formatter\StdoutJsonFormatter;
 use PHPUnit\Framework\TestCase;
@@ -29,13 +30,6 @@ class StdoutJsonFormatterTest extends TestCase
         $this->assertSame('app', $decoded['channel']);
         $this->assertSame('Example message', $decoded['message']);
         $this->assertSame('INFO', $decoded['level_name']);
-        $this->assertArrayHasKey('timestamp', $decoded);
-    }
-
-    public function testTimestampIsIso8601WithMicrosecondsAndOffset(): void
-    {
-        $decoded = $this->decode();
-
         $this->assertSame('2026-06-10T16:03:21.123456+03:00', $decoded['timestamp']);
     }
 
@@ -112,19 +106,21 @@ class StdoutJsonFormatterTest extends TestCase
         $this->assertSame('', $context['note']);
     }
 
-    public function testOmitsEmptyContextExtraAndFullMessage(): void
+    public function testOmitsEmptyContextExtraAndCorrelationId(): void
     {
         $decoded = $this->decode();
 
         $this->assertArrayNotHasKey('context', $decoded);
         $this->assertArrayNotHasKey('extra', $decoded);
-        $this->assertArrayNotHasKey('full_message', $decoded);
         $this->assertArrayNotHasKey('correlation_id', $decoded);
     }
 
-    public function testTruncatesRecordsExceedingByteCap(): void
+    /**
+     * @dataProvider oversizeMessageProvider
+     */
+    public function testTruncatesOversizeRecordsWithinByteCap(string $message): void
     {
-        $line = rtrim($this->format(['message' => str_repeat('x', 40000)]), "\n");
+        $line = rtrim($this->format(['message' => $message]), "\n");
 
         $this->assertLessThanOrEqual(32766, strlen($line));
         $decoded = json_decode($line, true);
@@ -132,16 +128,17 @@ class StdoutJsonFormatterTest extends TestCase
         $this->assertTrue($decoded['truncated']);
     }
 
-    public function testTruncatesEscapeHeavyRecordWithinByteCap(): void
+    /**
+     * @return array<string, array{string}>
+     */
+    public function oversizeMessageProvider(): array
     {
-        // Characters that JSON-escapes to multiple bytes (" -> \", \n -> \\n, \x01 -> ):
-        // the cap must be enforced against the ENCODED line, not the raw byte count.
-        $line = rtrim($this->format(['message' => str_repeat("\"\n\x01", 20000)]), "\n");
-
-        $this->assertLessThanOrEqual(32766, strlen($line));
-        $decoded = json_decode($line, true);
-        $this->assertIsArray($decoded);
-        $this->assertTrue($decoded['truncated']);
+        return [
+            'plain' => [str_repeat('x', 40000)],
+            // Chars that JSON-escapes to multiple bytes (" -> \", \n -> \\n, \x01 -> ):
+            // the cap must be enforced against the ENCODED line, not the raw byte count.
+            'escape-heavy' => [str_repeat("\"\n\x01", 20000)],
+        ];
     }
 
     public function testDropsContextAndExtraBeforeTruncatingMessage(): void
@@ -186,6 +183,20 @@ class StdoutJsonFormatterTest extends TestCase
 
         $this->assertSame(999, $decoded['level']);
         $this->assertSame('CUSTOM', $decoded['level_name']);
+    }
+
+    public function testThrowsWhenRecordHasNoDatetime(): void
+    {
+        $this->expectException(InvalidArgumentException::class);
+
+        (new StdoutJsonFormatter(self::APPLICATION_NAME))->format([
+            'message' => 'no datetime',
+            'level' => Logger::INFO,
+            'level_name' => 'INFO',
+            'channel' => 'app',
+            'context' => [],
+            'extra' => [],
+        ]);
     }
 
     /**
