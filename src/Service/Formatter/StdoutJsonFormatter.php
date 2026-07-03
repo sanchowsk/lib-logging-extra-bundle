@@ -8,6 +8,7 @@ use DateTimeInterface;
 use InvalidArgumentException;
 use Monolog\Formatter\NormalizerFormatter;
 use Monolog\Logger;
+use Paysera\LoggingExtraBundle\Service\ExceptionMessageParser;
 
 /**
  * Formats Monolog records as compact JSON Lines for stdout, collected by VictoriaLogs.
@@ -28,7 +29,7 @@ class StdoutJsonFormatter extends NormalizerFormatter
     {
         parent::__construct('Y-m-d\TH:i:s.uP');
 
-        $this->encoder = new StdoutRecordEncoder($applicationName);
+        $this->encoder = new StdoutRecordEncoder($applicationName, new ExceptionMessageParser());
     }
 
     /**

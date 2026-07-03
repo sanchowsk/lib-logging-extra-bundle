@@ -93,6 +93,16 @@ class StdoutJsonFormatterTest extends TestCase
         $this->assertSame('2 MB', $extra['memory_peak']);
     }
 
+    public function testSplitsExceptionMessageIntoShortMessageAndFullMessage(): void
+    {
+        $raw = 'Some exception in /app/src/Foo.php:42';
+
+        $decoded = $this->decode(['message' => $raw]);
+
+        $this->assertSame('Some exception', $decoded['message']);
+        $this->assertSame($raw, $decoded['full_message']);
+    }
+
     public function testPreservesFalseyContextValues(): void
     {
         $decoded = $this->decode([

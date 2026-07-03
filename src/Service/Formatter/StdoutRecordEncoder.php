@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Paysera\LoggingExtraBundle\Service\Formatter;
 
 use DateTimeInterface;
+use Paysera\LoggingExtraBundle\Service\ExceptionMessageParser;
 
 /**
  * Encodes an already-normalized Monolog record into a single compact JSON line for stdout.
@@ -33,9 +34,15 @@ class StdoutRecordEncoder
      */
     private $applicationName;
 
-    public function __construct(string $applicationName)
+    /**
+     * @var ExceptionMessageParser
+     */
+    private $exceptionMessageParser;
+
+    public function __construct(string $applicationName, ExceptionMessageParser $exceptionMessageParser)
     {
         $this->applicationName = $applicationName;
+        $this->exceptionMessageParser = $exceptionMessageParser;
     }
 
     /**
@@ -57,6 +64,15 @@ class StdoutRecordEncoder
             unset($extra['correlation_id']);
         }
 
+        // When the message is an exception dump, keep the short headline in `message` and the
+        // full original in `full_message`, matching the canonical evp formatter.
+        $fullMessage = null;
+        $parsedMessage = $this->exceptionMessageParser->parse($message);
+        if ($parsedMessage !== null) {
+            $fullMessage = $message;
+            $message = $parsedMessage;
+        }
+
         $fields = [
             'timestamp' => $datetime->format('Y-m-d\TH:i:s.uP'),
             'application_name' => $this->applicationName,
@@ -64,6 +80,7 @@ class StdoutRecordEncoder
             'level' => self::SYSLOG_LEVELS_BY_MONOLOG_LEVEL[$level] ?? $level,
             'level_name' => $levelName,
             'message' => $message,
+            'full_message' => $fullMessage,
             'context' => $context,
             'extra' => $extra,
             'correlation_id' => $correlationId,
@@ -83,6 +100,14 @@ class StdoutRecordEncoder
         }
 
         $fields['truncated'] = true;
+        if (isset($fields['full_message'])) {
+            unset($fields['full_message']);
+            $json = $this->toJson($fields);
+            if (strlen($json) <= self::MAX_JSON_BYTE_COUNT) {
+                return $json;
+            }
+        }
+
         unset($fields['context'], $fields['extra']);
         $json = $this->toJson($fields);
         if (strlen($json) <= self::MAX_JSON_BYTE_COUNT) {
