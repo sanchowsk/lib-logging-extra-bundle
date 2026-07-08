@@ -160,19 +160,24 @@ class StdoutRecordEncoder
             return $truncated;
         }
 
-        if ($leadByte >= 0xF0) {
-            $expectedLength = 4;
-        } elseif ($leadByte >= 0xE0) {
-            $expectedLength = 3;
-        } else {
-            $expectedLength = 2;
-        }
-
-        if (strlen($truncated) - ($index - 1) < $expectedLength) {
+        if (strlen($truncated) - ($index - 1) < $this->utf8SequenceLength($leadByte)) {
             return substr($truncated, 0, $index - 1);
         }
 
         return $truncated;
+    }
+
+    private function utf8SequenceLength(int $leadByte): int
+    {
+        if ($leadByte >= 0xF0) {
+            return 4;
+        }
+
+        if ($leadByte >= 0xE0) {
+            return 3;
+        }
+
+        return 2;
     }
 
     /**

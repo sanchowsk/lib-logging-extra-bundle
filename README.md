@@ -124,9 +124,10 @@ monolog:
 
 Each stdout line is one compact JSON object: `timestamp` (ISO-8601, microseconds + offset),
 `application_name`, `channel`, syslog `level` (DEBUG=7 … EMERGENCY=0), `level_name`, `message`,
-optional `context`/`extra`, and a top-level `correlation_id` (hoisted from `extra`). Lines are capped
+optional `full_message` (the raw original when the message is exception-shaped), optional
+`context`/`extra`, and a top-level `correlation_id` (hoisted from `extra`). Lines are capped
 at 32766 bytes; oversize records stay single-line, are flagged `truncated`, and are shrunk by dropping
-`context`/`extra` first, then truncating `message` UTF-8-safely.
+`full_message` first, then `context`/`extra`, then truncating `message` UTF-8-safely.
 
 ## Usage
 

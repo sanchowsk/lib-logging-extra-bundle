@@ -13,9 +13,18 @@
             <argument>%paysera_logging_extra.application_name%</argument>
         </service>
 
+        <service id="paysera_logging_extra.service.exception_message_parser"
+                 class="Paysera\LoggingExtraBundle\Service\ExceptionMessageParser"/>
+
+        <service id="paysera_logging_extra.formatter.stdout_record_encoder"
+                 class="Paysera\LoggingExtraBundle\Service\Formatter\StdoutRecordEncoder">
+            <argument>%paysera_logging_extra.application_name%</argument>
+            <argument type="service" id="paysera_logging_extra.service.exception_message_parser"/>
+        </service>
+
         <service id="paysera_logging_extra.formatter.stdout_json"
                  class="Paysera\LoggingExtraBundle\Service\Formatter\StdoutJsonFormatter">
-            <argument>%paysera_logging_extra.application_name%</argument>
+            <argument type="service" id="paysera_logging_extra.formatter.stdout_record_encoder"/>
         </service>
     </services>
 </container>
