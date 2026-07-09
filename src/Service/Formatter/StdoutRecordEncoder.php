@@ -122,6 +122,15 @@ class StdoutRecordEncoder
             strlen($fields['message']) - $overflow
         );
 
+        $json = $this->toJson($fields);
+        if (strlen($json) <= self::MAX_JSON_BYTE_COUNT) {
+            return $json;
+        }
+
+        // Everything left is fixed-size, and correlation_id is the only one an oversize value can
+        // reach at runtime (it is hoisted verbatim from `extra`). Drop it so the cap always holds.
+        unset($fields['correlation_id']);
+
         return $this->toJson($fields);
     }
 

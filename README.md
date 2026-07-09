@@ -127,7 +127,13 @@ Each stdout line is one compact JSON object: `timestamp` (ISO-8601, microseconds
 optional `full_message` (the raw original when the message is exception-shaped), optional
 `context`/`extra`, and a top-level `correlation_id` (hoisted from `extra`). Lines are capped
 at 32766 bytes; oversize records stay single-line, are flagged `truncated`, and are shrunk by dropping
-`full_message` first, then `context`/`extra`, then truncating `message` UTF-8-safely.
+`full_message` first, then `context`/`extra`, then truncating `message` UTF-8-safely, and finally
+dropping `correlation_id`.
+
+Exception-shaped messages (`RuntimeException: boom in /app/src/Foo.php:42`) are split into a short
+`message` and the raw `full_message`. Matching is case-insensitive, which differs from the canonical
+formatter in `evp/lib-application-logging-bundle`: that one only recognises a lowercase `exception`,
+so it leaves standard PHP exception messages unsplit and emits no `full_message` for them.
 
 ## Usage
 

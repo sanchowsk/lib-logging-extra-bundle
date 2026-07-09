@@ -30,7 +30,6 @@ class StdoutJsonFormatterTest extends TestCase
         $this->assertIsArray($decoded);
         $this->assertSame(self::APPLICATION_NAME, $decoded['application_name']);
         $this->assertSame('app', $decoded['channel']);
-        $this->assertSame('Example message', $decoded['message']);
         $this->assertSame('INFO', $decoded['level_name']);
         $this->assertSame('2026-06-10T16:03:21.123456+03:00', $decoded['timestamp']);
     }
@@ -45,7 +44,17 @@ class StdoutJsonFormatterTest extends TestCase
         $decoded = json_decode($line, true);
         $this->assertIsArray($decoded);
         $this->assertSame(
-            ['timestamp', 'application_name', 'channel', 'level', 'level_name', 'message', 'context', 'extra', 'correlation_id'],
+            [
+                'timestamp',
+                'application_name',
+                'channel',
+                'level',
+                'level_name',
+                'message',
+                'context',
+                'extra',
+                'correlation_id',
+            ],
             array_keys($decoded),
             'Field order must match the canonical evp StdoutJsonFormatter'
         );
@@ -95,14 +104,49 @@ class StdoutJsonFormatterTest extends TestCase
         $this->assertSame('2 MB', $extra['memory_peak']);
     }
 
-    public function testSplitsExceptionMessageIntoShortMessageAndFullMessage(): void
+    /**
+     * @dataProvider messageProvider
+     */
+    public function testRendersMessageAndFullMessage(
+        string $rawMessage,
+        string $expectedMessage,
+        ?string $expectedFullMessage
+    ): void {
+        $decoded = $this->decode(['message' => $rawMessage]);
+
+        $this->assertSame($expectedMessage, $decoded['message']);
+
+        if ($expectedFullMessage === null) {
+            $this->assertArrayNotHasKey('full_message', $decoded);
+
+            return;
+        }
+
+        $this->assertSame($expectedFullMessage, $decoded['full_message']);
+    }
+
+    /**
+     * @return array<string, array{string, string, string|null}>
+     */
+    public function messageProvider(): array
     {
-        $raw = 'Some exception in /app/src/Foo.php:42';
-
-        $decoded = $this->decode(['message' => $raw]);
-
-        $this->assertSame('Some exception', $decoded['message']);
-        $this->assertSame($raw, $decoded['full_message']);
+        return [
+            'plain message is emitted unchanged' => [
+                'Example message',
+                'Example message',
+                null,
+            ],
+            'lowercase exception message is split' => [
+                'Some exception in /app/src/Foo.php:42',
+                'Some exception',
+                'Some exception in /app/src/Foo.php:42',
+            ],
+            'standard php exception class is split' => [
+                'RuntimeException: boom in /app/src/Foo.php:42',
+                'RuntimeException: boom',
+                'RuntimeException: boom in /app/src/Foo.php:42',
+            ],
+        ];
     }
 
     public function testPreservesFalseyContextValues(): void
@@ -134,7 +178,7 @@ class StdoutJsonFormatterTest extends TestCase
     {
         $line = rtrim($this->format(['message' => $message]), "\n");
 
-        $this->assertLessThanOrEqual(32766, strlen($line));
+        $this->assertLessThanOrEqual(StdoutRecordEncoder::MAX_JSON_BYTE_COUNT, strlen($line));
         $decoded = json_decode($line, true);
         $this->assertIsArray($decoded);
         $this->assertTrue($decoded['truncated']);
@@ -164,6 +208,23 @@ class StdoutJsonFormatterTest extends TestCase
         $this->assertTrue($decoded['truncated']);
         $this->assertArrayNotHasKey('context', $decoded);
         $this->assertArrayNotHasKey('extra', $decoded);
+    }
+
+    public function testDropsCorrelationIdWhenItAloneExceedsTheByteCap(): void
+    {
+        // correlation_id is hoisted verbatim and is not truncatable, so it is the last field dropped
+        // to keep the cap; every other remaining field is fixed-size.
+        $line = rtrim($this->format([
+            'message' => str_repeat('x', 1000),
+            'extra' => ['correlation_id' => str_repeat('c', 40000)],
+        ]), "\n");
+
+        $this->assertLessThanOrEqual(StdoutRecordEncoder::MAX_JSON_BYTE_COUNT, strlen($line));
+
+        $decoded = json_decode($line, true);
+        $this->assertIsArray($decoded);
+        $this->assertTrue($decoded['truncated']);
+        $this->assertArrayNotHasKey('correlation_id', $decoded);
     }
 
     public function testFormatBatchEmitsOneLinePerRecord(): void
